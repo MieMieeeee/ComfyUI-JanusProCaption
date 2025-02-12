@@ -1,11 +1,13 @@
 import os
 import torch
+import imghdr
+import glob
 import numpy as np
 from PIL import Image
 from transformers import AutoModelForCausalLM
 
 import folder_paths
-from .janus.models import MultiModalityCausalLM, VLChatProcessor
+from .janus.models import VLChatProcessor
 from .utils import mie_log
 
 MY_CATEGORY = "🐑 JanusProCaption"
@@ -56,6 +58,61 @@ class JanusProModelLoader:
         return {"model": self.model, "processor": processor},
 
 
+# Learn from https://github.com/CY-CHENYUE/ComfyUI-Janus-Pro
+def describe_single_image(model, image, question, seed, temperature, top_p, max_new_tokens):
+    processor = model['processor']
+    model = model['model']
+
+    # 设置随机种子
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+
+    # ComfyUI中的图像格式是 BCHW (Batch, Channel, Height, Width)
+    if len(image.shape) == 4:  # BCHW format
+        if image.shape[0] == 1:
+            image = image.squeeze(0)  # 移除batch维度，现在是 [H, W, C]
+
+    # 确保值范围在[0,1]之间并转换为uint8
+    image = (torch.clamp(image, 0, 1) * 255).cpu().numpy().astype(np.uint8)
+
+    # 转换为PIL图像
+    pil_image = Image.fromarray(image, mode='RGB')
+
+    conversation = [
+        {
+            "role": "<|User|>",
+            "content": f"<image_placeholder>\n{question}",
+            "images": [pil_image],
+        },
+        {"role": "<|Assistant|>", "content": ""},
+    ]
+
+    prepare_inputs = processor(
+        conversations=conversation,
+        images=[pil_image],
+        force_batchify=True
+    ).to(model.device)
+
+    inputs_embeds = model.prepare_inputs_embeds(**prepare_inputs)
+
+    outputs = model.language_model.generate(
+        inputs_embeds=inputs_embeds,
+        attention_mask=prepare_inputs.attention_mask,
+        pad_token_id=processor.tokenizer.eos_token_id,
+        bos_token_id=processor.tokenizer.bos_token_id,
+        eos_token_id=processor.tokenizer.eos_token_id,
+        max_new_tokens=max_new_tokens,
+        do_sample=True,
+        temperature=temperature,
+        top_p=top_p,
+        use_cache=True,
+    )
+
+    answer = processor.tokenizer.decode(outputs[0].cpu().tolist(), skip_special_tokens=True)
+
+    return answer
+
+
 class JanusProDescribeImage:
     @classmethod
     def INPUT_TYPES(s):
@@ -68,7 +125,7 @@ class JanusProDescribeImage:
                     "default": "Describe this image in detail."
                 }),
                 "seed": ("INT", {
-                    "default": 666666666666666,
+                    "default": 42,
                     "min": 0,
                     "max": 0xffffffffffffffff
                 }),
@@ -96,68 +153,72 @@ class JanusProDescribeImage:
     CATEGORY = MY_CATEGORY
 
     def describe_image(self, model, image, question, seed, temperature, top_p, max_new_tokens):
-        processor = model['processor']
-        model = model['model']
-
-        # 设置随机种子
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
-
-        # 打印初始图像信息
-        # print(f"Initial image shape: {image.shape}")
-        # print(f"Initial image type: {image.dtype}")
-        # print(f"Initial image device: {image.device}")
-
-        # ComfyUI中的图像格式是 BCHW (Batch, Channel, Height, Width)
-        if len(image.shape) == 4:  # BCHW format
-            if image.shape[0] == 1:
-                image = image.squeeze(0)  # 移除batch维度，现在是 [H, W, C]
-
-        # print(f"After squeeze shape: {image.shape}")
-
-        # 确保值范围在[0,1]之间并转换为uint8
-        image = (torch.clamp(image, 0, 1) * 255).cpu().numpy().astype(np.uint8)
-
-        # print(f"Final numpy shape: {image.shape}")
-        # print(f"Final numpy dtype: {image.dtype}")
-        # print(f"Final value range: [{image.min()}, {image.max()}]")
-
-        # 转换为PIL图像
-        pil_image = Image.fromarray(image, mode='RGB')
-
-        conversation = [
-            {
-                "role": "<|User|>",
-                "content": f"<image_placeholder>\n{question}",
-                "images": [pil_image],
-            },
-            {"role": "<|Assistant|>", "content": ""},
-        ]
-
-        prepare_inputs = processor(
-            conversations=conversation,
-            images=[pil_image],
-            force_batchify=True
-        ).to(model.device)
-
-        inputs_embeds = model.prepare_inputs_embeds(**prepare_inputs)
-
-        outputs = model.language_model.generate(
-            inputs_embeds=inputs_embeds,
-            attention_mask=prepare_inputs.attention_mask,
-            pad_token_id=processor.tokenizer.eos_token_id,
-            bos_token_id=processor.tokenizer.bos_token_id,
-            eos_token_id=processor.tokenizer.eos_token_id,
-            max_new_tokens=max_new_tokens,
-            do_sample=True,
-            temperature=temperature,
-            top_p=top_p,
-            use_cache=True,
-        )
-
-        answer = processor.tokenizer.decode(outputs[0].cpu().tolist(), skip_special_tokens=True)
-
+        answer = describe_single_image(model, image, question, seed, temperature, top_p, max_new_tokens)
         return (answer,)
+
+    @classmethod
+    def IS_CHANGED(cls, seed, **kwargs):
+        return seed
+
+
+class JanusProCaptionImageUnderDirectory:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model": ("MIE_JANUS_MODEL",),
+                "directory": ("STRING", {"default": "X://path/to/files"}),
+                "question": ("STRING", {
+                    "multiline": True,
+                    "default": "Describe this image in detail."
+                }),
+                "seed": ("INT", {
+                    "default": 42,
+                    "min": 0,
+                    "max": 0xffffffffffffffff
+                }),
+                "temperature": ("FLOAT", {
+                    "default": 0.1,
+                    "min": 0.0,
+                    "max": 1.0
+                }),
+                "top_p": ("FLOAT", {
+                    "default": 0.95,
+                    "min": 0.0,
+                    "max": 1.0
+                }),
+                "max_new_tokens": ("INT", {
+                    "default": 512,
+                    "min": 1,
+                    "max": 2048
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("log",)
+    FUNCTION = "describe_images"
+    CATEGORY = MY_CATEGORY
+
+    def describe_images(self, model, directory, question, seed, temperature, top_p, max_new_tokens):
+        image_files = [f for f in glob(os.path.join(directory, "*")) if imghdr.what(f)]
+        if not image_files:
+            return "No image files found in the directory."
+
+        for image_file in image_files:
+            with open(image_file, 'rb') as img:
+                image = Image.open(img)
+                image = np.array(image).transpose(2, 0, 1) / 255.0  # Convert to BCHW format
+
+            answer = describe_single_image(model, image, question, seed, temperature, top_p, max_new_tokens)
+
+            txt_file = os.path.splitext(image_file)[0] + ".txt"
+            with open(txt_file, 'w', encoding='utf-8') as f:
+                f.write(answer)
+
+        the_log_message = f"Described {len(image_files)} images in {directory}."
+        mie_log(the_log_message)
+        return the_log_message,
 
     @classmethod
     def IS_CHANGED(cls, seed, **kwargs):
