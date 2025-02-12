@@ -1,0 +1,15 @@
+[project]
+name = "comfyui_janus_pro_caption"
+description = "Describe image or create caption files using Janus Pro Model"
+version = "1.0.0"
+license = { file = "LICENSE" }
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/MieMieeeee/ComfyUI-JanusProCaption"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = "mie"
+DisplayName = "ComfyUI_JanusProCaption"
+Icon = ""
