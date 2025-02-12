@@ -1,6 +1,6 @@
 ## ComfyUI-JanusProCaption
 
-English | [简体中文](README_CN)
+English | [简体中文](README_CN.md)
 
 **ComfyUI-JanusProCaption** is a tool focused on generating image descriptions, powered by the Janus Pro model. It provides users with an intelligent and straightforward way to describe image content. Whether it's used in image-to-image workflows or for generating captions for LoRA model training, this tool meets diverse needs. <br>
 
