@@ -23,7 +23,7 @@ class JanusProModelLoader:
         return {
             "required": {
                 "model_name": (["deepseek-ai/Janus-Pro-1B", "deepseek-ai/Janus-Pro-7B"],),
-            },
+                "precision": (['fp16', 'bf16', 'fp32'], {"default": 'fp16'}), },
         }
 
     RETURN_TYPES = ("MIE_JANUS_MODEL",)
@@ -31,7 +31,7 @@ class JanusProModelLoader:
     FUNCTION = "load_model"
     CATEGORY = MY_CATEGORY
 
-    def load_model(self, model_name):
+    def load_model(self, model_name, precision):
         the_model_path = os.path.join(MODELS_DIR, os.path.basename(model_name))
 
         if self.model is None:
@@ -43,16 +43,9 @@ class JanusProModelLoader:
                 the_model_path,
                 trust_remote_code=True
             )
-
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
-            try:
-                dtype = torch.bfloat16
-                torch.zeros(1, dtype=dtype, device=device)
-            except RuntimeError:
-                dtype = torch.float16
-
-            self.model = self.model.to(dtype).to(device).eval()
+            self.model = self.model.to(precision).to(device).eval()
 
         processor = VLChatProcessor.from_pretrained(the_model_path)
 
@@ -253,7 +246,7 @@ def LoadImageCore(image_path):
             mask = np.array(i.getchannel('A')).astype(np.float32) / 255.0
             mask = 1. - torch.from_numpy(mask)
         else:
-            mask = torch.zeros((64,64), dtype=torch.float32, device="cpu")
+            mask = torch.zeros((64, 64), dtype=torch.float32, device="cpu")
         output_images.append(image)
         output_masks.append(mask.unsqueeze(0))
 
